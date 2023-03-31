@@ -14,9 +14,9 @@ if torch.cuda.is_available():
     ext = CUDAExtension(
         "block_sparse_native",
         [
-            "native/block_sparse_native.cpp",
-            "native/block_sparse_cutlass_kernel_back.cu",
-            "native/block_sparse_cutlass_kernel.cu",
+            "pytorch_block_sparse/native/block_sparse_native.cpp",
+            "pytorch_block_sparse/native/block_sparse_cutlass_kernel_back.cu",
+            "pytorch_block_sparse/native/block_sparse_cutlass_kernel.cu",
         ],
         extra_compile_args=["-I", "%s/pytorch_block_sparse" % rootdir],
     )
