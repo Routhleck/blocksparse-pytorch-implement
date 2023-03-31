@@ -35,7 +35,6 @@ class BlockSparseMatrix:
         self.n_blocks = self.get_n_blocks()
         self.data = self.get_data()
         blocks = self.get_indices()
-        pass
 
     # 初始化data
     def get_data(self, device="cuda"):
@@ -198,13 +197,85 @@ class BlockSparseMatrix:
         return blocks
 
     def flatten_first_dims(self, dense_a):
-        pass
+        if dense_a.dim() < 2:
+            raise RuntimeError("Dense matrix should have at least 2 dimensions")
+        rewritten_a = dense_a
+        if dense_a.dim() > 2:
+            # 将原先的前几维合并成一维, 最后一维保持不变
+            rewritten_a = dense_a.reshape(-1, dense_a.shape[-1])
+        return rewritten_a, None
 
     def unflatten_first_dims(self, result, info):
-        pass
+        shape_start = info
+        if len(shape_start) > 1:
+            result = result.reshape(*shape_start, result.shape[-1])
+        return result
 
-    def matmul_(self, dense_a):
-        pass
+    def matmul_(self, dense_a, transpose):
+        import block_sparse_native
 
-    def matmul(self, dense_a):
-        pass
+        shape_a = list(dense_a.shape)
+        shape_b = [self.shape[0], self.shape[1]]
+        block_shape = list(self.block_shape)
+
+        if transpose:
+            shape_b.reverse()
+            block_shape.reverse()
+
+        if shape_a[1] != shape_b[0]:
+            raise Exception(
+                "Invalid matrices sizes (%d, %d) x (%d, %d)" % (shape_a[0], shape_a[1], shape_b[0], shape_b[1])
+            )
+
+        result = torch.zeros((shape_b[1], shape_a[0]), device=dense_a.device)
+
+        if transpose:
+            ptr_b = self.row_start_ends_a
+            indices_b = self.cols_a
+            dim = 0
+        else:
+            ptr_b = self.col_start_ends_b
+            indices_b = self.rows_b
+            dim = 1
+
+        assert (shape_a[1] % block_shape[1]) == 0
+        assert self.data.is_contiguous()
+        assert result.is_contiguous()
+
+        assert ptr_b.is_contiguous()
+        assert ptr_b.dtype == self.int_type
+        assert indices_b.is_contiguous()
+        assert indices_b.dtype == self.int_type
+
+        assert ptr_b.shape[0] == self.block_count[dim] + 1
+
+        if transpose:
+            data_b = self.data
+        else:
+            data = self.data.view(-1, *block_shape)
+            data = data.transpose(1, 2)
+            data_b = data.reshape(-1, block_shape[1]).contiguous()
+
+        if not dense_a.is_contiguous():
+            dense_a = dense_a.contiguous()
+
+        block_sparse_native.blocksparse_matmul_cutlass(
+            dense_a,
+            True,
+            ptr_b,
+            indices_b,
+            data_b,
+            dense_a.shape[0],
+            shape_b[1],
+            shape_b[0],
+            block_shape[1],
+            block_shape[0],
+            result,
+        )
+        return result.t()
+
+    def matmul(self, dense_a, transpose=False):
+        rewritten_a, info_a = self.flatten_first_dims(dense_a)
+        result = self.matmul_(rewritten_a, transpose=transpose)
+        result = self.unflatten_first_dims(result, info_a)
+        return result
