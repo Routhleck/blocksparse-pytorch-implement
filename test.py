@@ -14,8 +14,14 @@ block_shape = (2, 2)
 bsm = BlockSparseMatrix.BlockSparseMatrix(dense_data=dense_data,
                                           shape=shape,
                                           block_shape=block_shape)
+# dense_a
+a = torch.randn(4, 4)
 
 
 print('bsm:', bsm.dense_data)
 print('block_mask:', bsm.get_mask())
 print('bsm.data:', bsm.data)
+
+c = bsm.matmul(a, False)
+print('a:', a)
+print('c:', c)

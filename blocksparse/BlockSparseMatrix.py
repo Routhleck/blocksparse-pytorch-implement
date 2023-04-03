@@ -1,11 +1,10 @@
 import torch
 
 
-class BlockSparseMatrix:
-    def __init__(self, dense_data, shape, block_shape=(32, 32)):
+class BlockSparseMatrix(torch.nn.Module):
+    def __init__(self, dense_data, shape, block_shape):
+        super().__init__()
         self.int_type = torch.int32
-        # dense矩阵dense_data
-        self.dense_data = dense_data
         # 将有数据的块变为以block_size为宽的data串
         self.data = None
         # dense_data的形状, 例如[64, 64]
@@ -26,18 +25,24 @@ class BlockSparseMatrix:
         self.block_count = None
         # n_blocks
         self.n_blocks = None
-        self.init_param()
+        self.init_param(dense_data)
 
     # 根据data初始化cols_a, row_start_ends_a, rows_b, col_start_ends_b, block_mask
-    def init_param(self):
+    def init_param(self, dense_data=None):
         self.block_count = self.get_block_count()
-        self.block_mask = self.get_mask()
+        self.block_mask = self.get_mask(dense_data)
         self.n_blocks = self.get_n_blocks()
-        self.data = self.get_data()
+        self.data = self.get_data(dense_data)
         blocks = self.get_indices()
 
+        # register
+        for name in (
+                "blocks",
+        ):
+            self.register_buffer(name, locals()[name])
+
     # 初始化data
-    def get_data(self, device="cuda"):
+    def get_data(self, dense_data, device="cuda"):
         """
         将有数据的块变为以block_size为宽的data串
         """
@@ -55,7 +60,7 @@ class BlockSparseMatrix:
             for j in range(self.block_count[1]):
                 if self.block_mask[i, j]:
                     data[assignment_count * self.block_shape[0]:(assignment_count + 1) * self.block_shape[0],
-                    :] = self.dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
+                    :] = dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
                          j * self.block_shape[1]:(j + 1) * self.block_shape[1]]
                     assignment_count += 1
         return data
@@ -75,19 +80,19 @@ class BlockSparseMatrix:
         return self.block_mask.sum()
 
     # 获取mask
-    def get_mask(self):
+    def get_mask(self, dense_data):
         """
         mask为布尔矩阵, 此block中只要有一个值有数据的为True, 否则为False, 形状为(block_count[0], block_count[1]), 类似数组
         需要遍历每个block, 如果有数据则将对应的mask置为True
         """
         X, Y = self.block_count
-        block_mask = torch.zeros(X * Y, dtype=torch.bool, device=self.dense_data.device)
+        block_mask = torch.zeros(X * Y, dtype=torch.bool, device=dense_data.device)
 
         # 遍历每个block
         for i in range(X):
             for j in range(Y):
                 # 如果有数据, 则将对应的mask置为True
-                if self.dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
+                if dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
                    j * self.block_shape[1]:(j + 1) * self.block_shape[1]].sum() != 0:
                     block_mask[i * Y + j] = True
         # 将block_mask变为(X, Y)的形状
@@ -162,7 +167,7 @@ class BlockSparseMatrix:
         return cols, row_start_ends
 
     # 获取index
-    def get_indices(self, block_ptr=None, device="cuda"):
+    def get_indices(self, block_ptr=None):
         """
         torch.nonzero(input, *, as_tuple=False) 是一个 PyTorch 的函数，
         用于返回一个张量中所有非零元素的位置索引。
@@ -177,7 +182,7 @@ class BlockSparseMatrix:
         nnz = torch.nonzero(self.block_mask, as_tuple=False)
         # 若没有block_ptr, 则将block_ptr初始化为从0到n_blocks的数组
         if block_ptr is None:
-            block_ptr = torch.arange(0, nnz.shape[0], device=self.dense_data.device)
+            block_ptr = torch.arange(0, nnz.shape[0], device=self.block_mask.device)
 
         # Sort the nnz according to block_ptr to build the self.blocks
         # data used by matmul_with_output_sparse_support_
@@ -203,7 +208,7 @@ class BlockSparseMatrix:
         if dense_a.dim() > 2:
             # 将原先的前几维合并成一维, 最后一维保持不变
             rewritten_a = dense_a.reshape(-1, dense_a.shape[-1])
-        return rewritten_a, None
+        return rewritten_a, dense_a.shape[:-1]
 
     def unflatten_first_dims(self, result, info):
         shape_start = info
@@ -279,3 +284,31 @@ class BlockSparseMatrix:
         result = self.matmul_(rewritten_a, transpose=transpose)
         result = self.unflatten_first_dims(result, info_a)
         return result
+
+    # 从dense_data构建BlockSparseMatrix类
+    @staticmethod
+    def from_dense(dense_data, block_shape=(32, 32)):
+        shape = dense_data.shape
+        return BlockSparseMatrix(dense_data, shape, block_shape)
+
+    def to_dense(self):
+        # 将稀疏矩阵转换为密集矩阵
+        dense_data = torch.zeros(self.shape, dtype=torch.float, device=self.data.device)
+        assignment_count = 0
+        for i in range(self.block_count[0]):
+            for j in range(self.block_count[1]):
+                if self.block_mask[i, j]:
+                    dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
+                    j * self.block_shape[1]:(j + 1) * self.block_shape[1]] = self.data[
+                    assignment_count * self.block_shape[0]:(assignment_count + 1) * self.block_shape[0], :]
+                    assignment_count += 1
+        return dense_data
+
+    def randn(self):
+        pass
+
+    def zeros(self):
+        pass
+
+    def ones(self):
+        pass
