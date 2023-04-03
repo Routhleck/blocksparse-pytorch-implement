@@ -2,11 +2,11 @@ import torch
 
 
 class BlockSparseMatrix(torch.nn.Module):
-    def __init__(self, dense_data, shape, block_shape):
+    def __init__(self, shape, block_shape, dense_data=None, data=None, block_mask=None):
         super().__init__()
         self.int_type = torch.int32
         # 将有数据的块变为以block_size为宽的data串
-        self.data = None
+        self.data = data
         # dense_data的形状, 例如[64, 64]
         self.shape = shape
         # block形状, 例如[32, 32]
@@ -20,15 +20,20 @@ class BlockSparseMatrix(torch.nn.Module):
         # col_start_ends_b
         self.col_start_ends_b = None
         # block_mask布尔矩阵, 此block中只要有一个值有数据的为True, 否则为False, 形状为block_count[0] * block_count[1], 类似数组
-        self.block_mask = None
+        self.block_mask = block_mask
         # block_count总共block的数量, 例如[2, 2]
         self.block_count = None
         # n_blocks
         self.n_blocks = None
-        self.init_param(dense_data)
+        if dense_data is not None:
+            self.init_param_from_dense(dense_data)
+        elif block_mask is not None and data is not None:
+            self.init_param_from_mask_and_data(block_mask, data)
+        else:
+            pass
 
     # 根据data初始化cols_a, row_start_ends_a, rows_b, col_start_ends_b, block_mask
-    def init_param(self, dense_data=None):
+    def init_param_from_dense(self, dense_data):
         self.block_count = self.get_block_count()
         self.block_mask = self.get_mask(dense_data)
         self.n_blocks = self.get_n_blocks()
@@ -38,6 +43,16 @@ class BlockSparseMatrix(torch.nn.Module):
         # register
         for name in (
                 "blocks",
+        ):
+            self.register_buffer(name, locals()[name])
+
+    def init_param_from_mask_and_data(self, block_mask, data):
+        self.block_count = self.get_block_count()
+        self.n_blocks = self.get_n_blocks()
+        blocks = self.get_indices()
+
+        for name in (
+            "blocks",
         ):
             self.register_buffer(name, locals()[name])
 
@@ -66,6 +81,10 @@ class BlockSparseMatrix(torch.nn.Module):
         return data
 
     # 获取总共block的数量
+    @staticmethod
+    def get_block_count_(shape, block_shape):
+        return torch.Size((shape[0] // block_shape[0], shape[1] // block_shape[1]))
+
     def get_block_count(self):
         """
         公式为：block_count = ((shape[0] // block_shape[0]), (shape[1] // block_shape[1]))
@@ -289,26 +308,79 @@ class BlockSparseMatrix(torch.nn.Module):
     @staticmethod
     def from_dense(dense_data, block_shape=(32, 32)):
         shape = dense_data.shape
-        return BlockSparseMatrix(dense_data, shape, block_shape)
+        return BlockSparseMatrix(shape, block_shape, dense_data=dense_data)
+
+    @staticmethod
+    def from_mask_and_data(shape, block_mask, data, block_shape=(32, 32)):
+        return BlockSparseMatrix(shape, block_shape, block_mask=block_mask, data=data)
 
     def to_dense(self):
         # 将稀疏矩阵转换为密集矩阵
         dense_data = torch.zeros(self.shape, dtype=torch.float, device=self.data.device)
-        assignment_count = 0
+        mask_count = 0
         for i in range(self.block_count[0]):
             for j in range(self.block_count[1]):
                 if self.block_mask[i, j]:
-                    dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
-                    j * self.block_shape[1]:(j + 1) * self.block_shape[1]] = self.data[
-                    assignment_count * self.block_shape[0]:(assignment_count + 1) * self.block_shape[0], :]
-                    assignment_count += 1
+                    dense_data[
+                        i * self.block_shape[0] : (i + 1) * self.block_shape[0],
+                        j * self.block_shape[1] : (j + 1) * self.block_shape[1],
+                    ] = self.data[mask_count * self.block_shape[0] : (mask_count + 1) * self.block_shape[0], :]
         return dense_data
 
-    def randn(self):
-        pass
+    @classmethod
+    def randn(
+        cls,
+        shape,
+        n_blocks=None,
+        block_shape=(32, 32),
+        device="cuda",
+        positive=False,
+    ):
+        result = cls.zeros(shape, n_blocks, block_shape, device)
+        with torch.no_grad():
+            if positive:
+                result.data.normal_().abs(result.data)
+            else:
+                result.data.normal_()
+        return result
 
-    def zeros(self):
-        pass
+    @classmethod
+    def zeros(
+        cls,
+        shape,
+        n_blocks=None,
+        block_shape=(32, 32),
+        device="cuda",
+    ):
+        """
+        生成一个全0的稀疏矩阵
+        先生成mask的布尔矩阵, mask的shape为shape[0] // block_shape[0] * shape[1] // block_shape[1]
+        若n_blocks为None, 则随机取 0 到 shape[0] * shape[1] // (block_shape[0] * block_shape[1])之间个块为True
+        若n_blocks不为None, 则随机取n_blocks个块为True
+        """
+        block_count = cls.get_block_count_(shape=shape,block_shape=block_shape)
+        if n_blocks is None:
+            n_blocks = torch.randint(0, block_count[0] * block_count[1], (1,), device=device).item()
+        else:
+            n_blocks = min(n_blocks, block_count[0] * block_count[1])
+        block_mask = torch.zeros(block_count, dtype=torch.bool, device=device)
+        block_indices = torch.randperm(block_count[0] * block_count[1], device=device)[:n_blocks]
+        block_mask.view(-1)[block_indices] = True
 
-    def ones(self):
-        pass
+        data = torch.zeros((n_blocks * block_shape[0], block_shape[1]), dtype=torch.float, device=device)
+        return cls.from_mask_and_data(shape=shape, block_shape=block_shape, block_mask=block_mask, data=data)
+
+    @classmethod
+    def ones(
+        cls,
+        shape,
+        n_blocks=None,
+        block_shape=(32, 32),
+        device="cuda",
+        positive=False,
+    ):
+        result = cls.zeros(shape, n_blocks, block_shape, device)
+        with torch.no_grad():
+            result.data += 1
+        return result
+
