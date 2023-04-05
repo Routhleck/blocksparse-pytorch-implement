@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 sizes = [640, 320, 960]
 block_shape = (32, 32)
 density = 0.1
@@ -35,19 +36,24 @@ a = pd.DataFrame(a)
 b = pd.DataFrame(b)
 b_data = pd.DataFrame(b_data)
 c = pd.DataFrame(c)
-a.to_csv('a.csv', index=False, header=False)
-b.to_csv('b.csv', index=False, header=False)
-b_data.to_csv('b_data.csv', index=False, header=False)
-c.to_csv('c.csv', index=False, header=False)
+
+# 创建test_out文件夹
+if not os.path.exists('test_out'):
+    os.makedirs('test_out')
+
+a.to_csv('test_out/a.csv', index=False, header=False)
+b.to_csv('test_out/b.csv', index=False, header=False)
+b_data.to_csv('test_out/b_data.csv', index=False, header=False)
+c.to_csv('test_out/c.csv', index=False, header=False)
 
 # 将a,b,c绘制成热力图
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-a = pd.read_csv('a.csv', header=None)
-b = pd.read_csv('b.csv', header=None)
-b_data = pd.read_csv('b_data.csv', header=None)
-c = pd.read_csv('c.csv', header=None)
+a = pd.read_csv('test_out/a.csv', header=None)
+b = pd.read_csv('test_out/b.csv', header=None)
+b_data = pd.read_csv('test_out/b_data.csv', header=None)
+c = pd.read_csv('test_out/c.csv', header=None)
 
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))
 sns.heatmap(a, ax=axes[0, 0], cmap='Blues', square=True, cbar=False, xticklabels=False, yticklabels=False)
@@ -63,5 +69,5 @@ axes[1, 1].set_title('c')
 # 设置主标题
 fig.suptitle('size: %s, block_size: %s, density: %.2f' % (str(sizes), str(block_shape), density), fontsize=20)
 # 保存图片
-plt.savefig('a_b_c.png', dpi=400, bbox_inches='tight')
+plt.savefig('test_out/a_b_c.png', dpi=400, bbox_inches='tight')
 plt.show()
