@@ -18,7 +18,7 @@ if torch.cuda.is_available():
             "pytorch_block_sparse/native/block_sparse_cutlass_kernel_back.cu",
             "pytorch_block_sparse/native/block_sparse_cutlass_kernel.cu",
         ],
-        extra_compile_args=["-I", "%s/pytorch_block_sparse" % rootdir],
+        extra_compile_args=["-I", f"{rootdir}/pytorch_block_sparse" , "-L", "usr/local/cuda/bin"],
     )
     ext_modules = [ext]
 else:

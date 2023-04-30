@@ -3,3 +3,6 @@
 *.pyc
 *.png
 *.csv
+*.pyd
+*.txt
+/pytorch_block_sparse.egg-info

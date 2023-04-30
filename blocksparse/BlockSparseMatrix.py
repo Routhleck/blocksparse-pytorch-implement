@@ -1,7 +1,7 @@
 import torch
 
 
-class BlockSparseMatrix(torch.nn.Module):
+class BlockSparseMatrix_torch(torch.nn.Module):
     def __init__(self, shape, block_shape, dense_data=None, data=None, block_mask=None):
         super().__init__()
         self.int_type = torch.int32
@@ -76,7 +76,7 @@ class BlockSparseMatrix(torch.nn.Module):
                 if self.block_mask[i, j]:
                     data[assignment_count * self.block_shape[0]:(assignment_count + 1) * self.block_shape[0],
                     :] = dense_data[i * self.block_shape[0]:(i + 1) * self.block_shape[0],
-                         j * self.block_shape[1]:(j + 1) * self.block_shape[1]]
+                         j * self.block_shape[1]:(j + 1) * self.block_shape[1]].t()
                     assignment_count += 1
         return data
 
@@ -164,14 +164,14 @@ class BlockSparseMatrix(torch.nn.Module):
         row_start_ends 是一个长度为 X+1 的零向量
         其中第 i 个元素表示分块矩阵的前 i 行(列)在 CSR格式中所占据的位置。
         """
-        row_start_ends = torch.zeros(X + 1, dtype=torch.long, device=device)
+        row_start_ends = torch.zeros((X + 1,), dtype=torch.long, device=device)
         """
         将row_start_ends在rows位置上的值加1
         """
         row_start_ends.index_add_(
             0,
             rows + 1,
-            torch.ones(rows.shape[0], dtype=torch.long, device=device),
+            torch.ones(size=(cols.shape[0],), dtype=torch.long, device=device),
         )
         """
         将row_start_ends中的值累加, 得到CSR格式中的行偏移(row offsets)数组
@@ -232,11 +232,12 @@ class BlockSparseMatrix(torch.nn.Module):
     def unflatten_first_dims(self, result, info):
         shape_start = info
         if len(shape_start) > 1:
-            result = result.reshape(*shape_start, result.shape[-1])
+            result = result.view(*shape_start, result.shape[-1])
         return result
 
     def matmul_(self, dense_a, transpose):
         import block_sparse_native
+        # from block_sparse_native.pyd import blocksparse_matmul_cutlass
 
         shape_a = list(dense_a.shape)
         shape_b = [self.shape[0], self.shape[1]]
@@ -251,7 +252,7 @@ class BlockSparseMatrix(torch.nn.Module):
                 "Invalid matrices sizes (%d, %d) x (%d, %d)" % (shape_a[0], shape_a[1], shape_b[0], shape_b[1])
             )
 
-        result = torch.zeros((shape_b[1], shape_a[0]), device=dense_a.device)
+        out = torch.zeros((shape_b[1], shape_a[0]), device=dense_a.device)
 
         if transpose:
             ptr_b = self.row_start_ends_a
@@ -264,7 +265,7 @@ class BlockSparseMatrix(torch.nn.Module):
 
         assert (shape_a[1] % block_shape[1]) == 0
         assert self.data.is_contiguous()
-        assert result.is_contiguous()
+        assert out.is_contiguous()
 
         assert ptr_b.is_contiguous()
         assert ptr_b.dtype == self.int_type
@@ -283,6 +284,27 @@ class BlockSparseMatrix(torch.nn.Module):
         if not dense_a.is_contiguous():
             dense_a = dense_a.contiguous()
 
+        # 将即将传入核函数的参数保存为csv
+        import pandas as pd
+        df_dense_a = pd.DataFrame(dense_a.cpu().numpy())
+        df_dense_a.to_csv('param/dense_a.csv', index=False)
+        df_ptr_b = pd.DataFrame(ptr_b.cpu().numpy())
+        df_ptr_b.to_csv('param/ptr_b.csv', index=False)
+        df_indices_b = pd.DataFrame(indices_b.cpu().numpy())
+        df_indices_b.to_csv('param/indices_b.csv', index=False)
+        df_data_b = pd.DataFrame(data_b.cpu().numpy())
+        df_data_b.to_csv('param/data_b.csv', index=False)
+        df_result = pd.DataFrame(out.cpu().numpy())
+        df_result.to_csv('param/result.csv', index=False)
+
+        # 保存字符串dense_a.shape[0], shape_b[1], shape_b[0], block_shape[1], block_shape[0]
+        with open('param/shape.txt', 'w') as f:
+            f.write('dense_a.shape[0]: ' + str(dense_a.shape[0]) + '\n')
+            f.write('shape_b[1]: ' + str(shape_b[1]) + '\n')
+            f.write('shape_b[0]: ' + str(shape_b[0]) + '\n')
+            f.write('block_shape[1]: ' + str(block_shape[1]) + '\n')
+            f.write('block_shape[0]: ' + str(block_shape[0]) + '\n')
+
         block_sparse_native.blocksparse_matmul_cutlass(
             dense_a,
             True,
@@ -294,9 +316,9 @@ class BlockSparseMatrix(torch.nn.Module):
             shape_b[0],
             block_shape[1],
             block_shape[0],
-            result,
+            out,
         )
-        return result.t()
+        return out.t()
 
     def matmul(self, dense_a, transpose=False):
         rewritten_a, info_a = self.flatten_first_dims(dense_a)
@@ -304,15 +326,15 @@ class BlockSparseMatrix(torch.nn.Module):
         result = self.unflatten_first_dims(result, info_a)
         return result
 
-    # 从dense_data构建BlockSparseMatrix类
+    # 从dense_data构建BlockSparseMatrix_torch类
     @staticmethod
     def from_dense(dense_data, block_shape=(32, 32)):
         shape = dense_data.shape
-        return BlockSparseMatrix(shape, block_shape, dense_data=dense_data)
+        return BlockSparseMatrix_torch(shape, block_shape, dense_data=dense_data)
 
     @staticmethod
     def from_mask_and_data(shape, block_mask, data, block_shape=(32, 32)):
-        return BlockSparseMatrix(shape, block_shape, block_mask=block_mask, data=data)
+        return BlockSparseMatrix_torch(shape, block_shape, block_mask=block_mask, data=data)
 
     def to_dense(self):
         # 将稀疏矩阵转换为密集矩阵
@@ -339,7 +361,8 @@ class BlockSparseMatrix(torch.nn.Module):
         result = cls.zeros(shape, n_blocks, block_shape, device)
         with torch.no_grad():
             if positive:
-                result.data.normal_().abs(result.data)
+                result.data.normal_()
+                result.data.abs_()
             else:
                 result.data.normal_()
         return result
