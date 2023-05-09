@@ -74,8 +74,45 @@ def get_ptr_indices(mask, blockcount, n_blocks, block_ptr=None):
 
     return ptr_b, indices_b
 
+def blocksparse_matmul_cpu_(
+            A_data,
+            B_ptr,
+            B_indices,
+            B_data,
+            C_data,
+            m,
+            n,
+            k,
+            block_size_rows_b,
+            block_size_cols_b):
+    res_val = torch.zeros((m, n))
+    # index[0]为index, index[1]为该index对应的block的index
+    for idx, index in enumerate(B_indices):
+        # find the column
+        row_index = 0
+        for ptr in B_ptr[1:]:
+            if ptr > idx:
+                break
+            row_index += 1
+        row_start = row_index * block_size_cols_b
+        # find the row
+        col_start = index[0] * block_size_rows_b
+        # calculate the value and add to the res_val
+        for i in range(block_size_rows_b):
+            for j in range(block_size_cols_b):
+                if B_data[index[1] * block_size_rows_b + i, j] == 0:
+                    continue
+                row_now = row_start + j
+                res_val[:, row_now] += A_data[:, col_start + i] * B_data[index[1] * block_size_rows_b + i, j]
+                '''for c_m in range(m):
+                    print('c{c_col}{c_row} = a{a_col}{a_row} * b{b_col}{b_row}'.format(c_col=c_m + 1,c_row=row_now + 1,
+                                                                                     a_col=c_m + 1, a_row=col_start + i + 1,
+                                                                                     b_col=col_start + i + 1, b_row=row_start + j + 1))
+                    res_val[c_m, row_now] += A_data[c_m, col_start + i] * B_data[index[1] * block_size_rows_b + i, j]'''
 
-def blocksparse_matmul(dense_a, dense_b, blockshape=(32, 32)):
+    return res_val
+
+def blocksparse_matmul(dense_a, dense_b, blockshape=(32, 32), device='cpu'):
     # m, n, k
     m = dense_a.shape[0]
     n = dense_b.shape[1]
@@ -104,10 +141,8 @@ def blocksparse_matmul(dense_a, dense_b, blockshape=(32, 32)):
     # indices_b = indices_b.contiguous()
     # data_b = data_b.contiguous()
 
-    import block_sparse_native
-    block_sparse_native.blocksparse_matmul_cutlass(
-        dense_a,
-        True,
+    if device == 'cpu':
+        out = blocksparse_matmul_cpu_(dense_a,
         ptr_b,
         indices_b,
         data_b,
@@ -116,7 +151,26 @@ def blocksparse_matmul(dense_a, dense_b, blockshape=(32, 32)):
         k,
         blockshape[0],
         blockshape[1],
-        out,
-    )
+        out)
+        return out
+    elif device == 'gpu' or device == 'cuda':
+        import block_sparse_native
+        block_sparse_native.blocksparse_matmul_cutlass(
+            dense_a,
+            True,
+            ptr_b,
+            indices_b,
+            data_b,
+            m,
+            n,
+            k,
+            blockshape[0],
+            blockshape[1],
+            out,
+        )
+        return out.t()
+    else:
+        raise Exception('Invalid device: ', device)
 
-    return out.t()
+
+
