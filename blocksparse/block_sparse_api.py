@@ -74,7 +74,7 @@ def get_ptr_indices(mask, blockcount, n_blocks, block_ptr=None):
 
     return ptr_b, indices_b
 
-def blocksparse_matmat_cpu_(
+def blocksparse_matmul_cpu_(
             A_data,
             B_ptr,
             B_indices,
@@ -142,7 +142,7 @@ def blocksparse_matmul(dense_a, dense_b, blockshape=(32, 32), device='cpu'):
     # data_b = data_b.contiguous()
 
     if device == 'cpu':
-        out = blocksparse_matmat_cpu_(dense_a,
+        out = blocksparse_matmul_cpu_(dense_a,
         ptr_b,
         indices_b,
         data_b,
